@@ -17,7 +17,6 @@ import { MatDialog } from '@angular/material/dialog';
 import { ElegirMetodoNotificacionComponent } from '../elegir-metodo-notificacion/elegir-metodo-notificacion.component';
 import { MatSnackBar } from '@angular/material/snack-bar';
 import { Usuario } from '../../models/usuario';
-import { Observable } from 'rxjs';
 import { InscripcionService } from '../../services/inscripcion.service';
 
 @Component({
@@ -101,12 +100,15 @@ export class GestionProductosComponent implements OnInit {
   iniciarInscripcionProducto(id: number): void {
     if (!this.inscribiendo) {
       const producto = this.productosNoInscritos.find(p => p.id === id);
-      if (producto)
+      if (producto) {
         producto.editando = true;
-
-      this.inscribiendo = true;
-      this.productoAgregando = { ...producto }
-      this.productoAgregando.valorInscripcion = this.valorInscribir;
+        this.valorInscribir = producto!.montoMinimo;
+        this.inscribiendo = true;
+        this.productoAgregando = { ...producto }
+        this.productoAgregando.valorInscripcion = this.valorInscribir;
+      }
+      else
+        return;
     }
   }
 
@@ -120,43 +122,51 @@ export class GestionProductosComponent implements OnInit {
     this.inscribiendo = false;
   }
 
+  abortarInscripcion(mensaje: string, nombre: string): void{
+    this.snackBar.open(`${mensaje} ${nombre}`, 'Cerrar', {
+      duration: 4000,
+      panelClass: ['snack-error']
+    });
+    this.inscribiendo = false;
+    this.valorInscribir = 0;
+  }
+
   guardarInscripcionProducto(id: number): void {
     const producto = this.productosNoInscritos.find(p => p.id === id);
     if (producto)
       producto.editando = false;
 
-    if (producto?.montoMinimo == null) {
+    if (producto?.montoMinimo == null)
       return;
-    }
+
     if (this.usuario != null) {
-      if (this.usuario.saldo >= producto?.montoMinimo && this.valorInscribir >= producto?.montoMinimo && this.usuario.saldo - this.valorInscribir >= 0) {
-        this.usuario.saldo -= this.valorInscribir;
+      if ((this.usuario.saldo < producto?.montoMinimo || this.usuario.saldo - this.valorInscribir < 0)) {
+        this.abortarInscripcion("No tiene saldo suficiente para inscribir el producto", producto.nombre);
+        return;
+      }
+      if (this.valorInscribir < producto?.montoMinimo) {
+        this.abortarInscripcion("El valor ingresado para realizar la transacción no es suficiente para adquirir el producto", producto.nombre);
+        return;
+      }
 
-        this.usuarioService.actualizarSaldo(this.usuario.id, this.usuario.saldo).subscribe(() => {
-          this.productosNoInscritos = this.productosNoInscritos.filter(p => p.id !== id);
-
-          this.inscripciones.push({ id: producto.id, fecha: new Date, idProducto: producto.id, nombreProducto: producto.nombre, idUsuario: this.usuario!.id });
-          this.inscripcionService.inscribirProducto(producto.id, producto.nombre, this.usuario!.id, new Date).subscribe(() => {
-            this.transaccionService.agregarTransaccion(producto.id, producto.nombre, this.usuario!.id, this.valorInscribir, new Date).subscribe(() => {
-              this.inscripciones = [...this.inscripciones];
-              this.transacciones.push({ id: producto.id + 50, fecha: new Date, idProducto: producto.id, nombreProducto: producto.nombre, idUsuario: this.usuario!.id, monto: this.valorInscribir });
-              this.transacciones = [...this.transacciones];
-              this.inscribiendo = false;
-              this.valorInscribir = 0;
-              this.productoAgregando = {}
-              this.abrirDialogo();
+      this.usuario.saldo -= this.valorInscribir;
+      this.usuarioService.actualizarSaldo(this.usuario.id, this.usuario.saldo).subscribe(() => {
+        this.productosNoInscritos = this.productosNoInscritos.filter(p => p.id !== id);
+        this.inscripcionService.inscribirProducto(producto.id, producto.nombre, this.usuario!.id, new Date).subscribe(() => {
+          this.transaccionService.agregarTransaccion(producto.id, producto.nombre, this.usuario!.id, this.valorInscribir, new Date).subscribe(() => {
+            this.inscripcionService.getProductosInscritos(this.usuario!.id).subscribe(data => {
+              this.inscripciones = data;
+              this.transaccionService.getTransaccionesPorUsuario(this.usuario!.id).subscribe(data => {
+                this.transacciones = data;
+                this.inscribiendo = false;
+                this.valorInscribir = 0;
+                this.productoAgregando = {}
+                this.abrirDialogo();
+              });
             });
           });
         });
-      }
-      else {
-        this.snackBar.open(`No tiene saldo suficiente para adquirir el fondo ${producto.nombre}`, 'Cerrar', {
-          duration: 4000,
-          panelClass: ['snack-error']
-        });
-        this.inscribiendo = false;
-        this.valorInscribir = 0;
-      }
+      });
     }
   }
 
@@ -183,22 +193,25 @@ export class GestionProductosComponent implements OnInit {
           this.usuarioService.actualizarSaldo(this.usuario.id, this.usuario.saldo + transaccion.monto).subscribe(() => {
             this.usuario!.saldo += transaccion.monto;
 
-            this.inscripcionService.eliminarInscripcion(inscripcion.id).subscribe(() => {
-              this.inscripciones = this.inscripciones.filter(i => i.id !== id);
-              this.inscripciones = [...this.inscripciones];
-
-              const producto = this.productos.find(p => p.id === transaccion.idProducto);
-              if (producto) {
-                if (this.usuario) {
-                  this.transaccionService.agregarTransaccion(producto.id, producto.nombre, this.usuario!.id, - transaccion.monto, new Date).subscribe(() => {
-                    this.transacciones.push({ id: transaccion.id, fecha: new Date, idProducto: transaccion.idProducto, nombreProducto: producto.nombre, idUsuario: this.usuario!.id, monto: - transaccion.monto });
-                    this.transacciones = [...this.transacciones];
-                    this.productosNoInscritos.push(producto);
-                    this.productosNoInscritos = [...this.productosNoInscritos];
-                    this.eliminando = false;
-                    this.inscripcioEliminando = {}
-                  })
-                }
+            this.inscripcionService.eliminarInscripcion(inscripcion.id).subscribe({
+              complete: () => {
+                this.inscripcionService.getProductosInscritos(this.usuario!.id).subscribe(data => {
+                  this.inscripciones = data;
+                  const producto = this.productos.find(p => p.id === transaccion.idProducto);
+                  if (producto) {
+                    if (this.usuario) {
+                      this.transaccionService.agregarTransaccion(producto.id, producto.nombre, this.usuario!.id, - transaccion.monto, new Date).subscribe(() => {
+                        this.transaccionService.getTransaccionesPorUsuario(this.usuario!.id).subscribe(data => {
+                          this.transacciones = data;
+                          this.productosNoInscritos.push(producto);
+                          this.productosNoInscritos = [...this.productosNoInscritos];
+                          this.eliminando = false;
+                          this.inscripcioEliminando = {}
+                        });
+                      })
+                    }
+                  }
+                });
               }
             })
           })

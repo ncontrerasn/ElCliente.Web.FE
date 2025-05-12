@@ -1,0 +1,14 @@
+.limited-width-table {
+    width: 90%;
+    max-width: 1000px;
+    margin: 40px auto 0 auto;
+}
+
+.center-text td,
+.center-text th {
+    text-align: center;
+}
+
+.center-text {
+    text-align: center;
+}
